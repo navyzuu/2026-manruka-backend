@@ -9,6 +9,7 @@ namespace Manruka.API.Data
 
         public DbSet<User> Users { get; set; }
         public DbSet<Room> Rooms { get; set; }
+        public DbSet<Booking> Bookings { get; set; }
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
@@ -16,6 +17,10 @@ namespace Manruka.API.Data
             modelBuilder.Entity<User>()
                 .HasIndex(u => u.NRP)
                 .IsUnique();
+
+            modelBuilder.Entity<Booking>()
+                .Property(b => b.BookingDate)
+                .HasColumnType("date");
 
             // Seed Data Ruangan Awal
             modelBuilder.Entity<Room>().HasData(
