@@ -66,7 +66,7 @@ dotnet run
 
 Jika berhasil, terminal akan menampilkan port yang aktif, misalnya:
 ```bash 
-Now listening on: http://localhost:5000
+Now listening on: http://localhost:5432
 ```
 ---
 ## ⚠️ Catatan untuk Frontend Developer
