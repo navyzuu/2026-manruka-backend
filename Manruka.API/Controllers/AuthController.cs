@@ -54,16 +54,42 @@ namespace Manruka.API.Controllers
                 return BadRequest("User tidak ditemukan.");
             }
 
-            if (!BCrypt.Net.BCrypt.Verify(request.Password, user.PasswordHash))
+            // --- LOGIKA HYBRID BARU ---
+            bool isPasswordValid = false;
+
+            // 1. Cek apakah password di DB sama persis dengan input (Untuk Admin Seed "admin123")
+            if (user.PasswordHash == request.Password)
+            {
+                isPasswordValid = true;
+            }
+            // 2. Jika tidak sama, coba cek apakah itu Hash (Untuk User hasil Register)
+            else
+            {
+                try
+                {
+                    // Cek hash hanya jika string terlihat seperti hash BCrypt (diawali $)
+                    if (user.PasswordHash.StartsWith("$"))
+                    {
+                        isPasswordValid = BCrypt.Net.BCrypt.Verify(request.Password, user.PasswordHash);
+                    }
+                }
+                catch
+                {
+                    isPasswordValid = false;
+                }
+            }
+
+            if (!isPasswordValid)
             {
                 return BadRequest("Password salah.");
             }
+            // --------------------------
 
-            return Ok(new UserDto 
-            { 
-                Id = user.Id, 
-                Name = user.Name, 
-                Role = user.Role 
+            return Ok(new UserDto
+            {
+                Id = user.Id,
+                Name = user.Name,
+                Role = user.Role
             });
         }
     }

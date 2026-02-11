@@ -169,6 +169,19 @@ namespace Manruka.API.Migrations
                         .IsUnique();
 
                     b.ToTable("Users");
+
+                    b.HasData(
+                        new
+                        {
+                            Id = 99,
+                            Department = "IT Support",
+                            Major = "-",
+                            NRP = "admin",
+                            Name = "Administrator",
+                            PasswordHash = "admin123",
+                            Role = "Admin",
+                            YearEntry = 2020
+                        });
                 });
 
             modelBuilder.Entity("Manruka.API.Entities.Booking", b =>

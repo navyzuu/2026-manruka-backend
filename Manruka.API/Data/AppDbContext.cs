@@ -30,6 +30,20 @@ namespace Manruka.API.Data
                 new Room { Id = 4, Name = "C-103", Capacity = 30, Description = "Lantai 1", IsAvailable = true },
                 new Room { Id = 5, Name = "B-204", Capacity = 60, Description = "Lantai 2", IsAvailable = true }
             );
+
+            modelBuilder.Entity<User>().HasData(
+                new User 
+                { 
+                    Id = 99, // Gunakan ID 99 agar tidak bentrok dengan user yang sudah Anda buat
+                    Name = "Administrator",
+                    NRP = "admin", // Login pakai ini
+                    Department = "IT Support",
+                    Major = "-",
+                    YearEntry = 2020,
+                    Role = "Admin",
+                    PasswordHash = "admin123"
+                }
+            );
         }
     }
 }
