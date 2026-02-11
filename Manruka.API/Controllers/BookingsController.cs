@@ -1,8 +1,8 @@
-using Manruka.API.Data;
-using Manruka.API.DTOs;
-using Manruka.API.Entities;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Manruka.API.Data;
+using Manruka.API.Entities;
+using System.Globalization;
 
 namespace Manruka.API.Controllers
 {
@@ -17,97 +17,177 @@ namespace Manruka.API.Controllers
             _context = context;
         }
 
-        // GET: api/bookings (Melihat semua daftar pinjaman)
+        // ---------------------------------------------------------
+        // 1. GET: Ambil Semua Data
+        // ---------------------------------------------------------
         [HttpGet]
-        public async Task<ActionResult<IEnumerable<BookingDto>>> GetBookings()
+        public async Task<ActionResult<IEnumerable<object>>> GetBookings()
         {
             var bookings = await _context.Bookings
-                .Include(b => b.User) // Join tabel User
-                .Include(b => b.Room) // Join tabel Room
-                .Select(b => new BookingDto
+                .Include(b => b.Room)
+                .Include(b => b.User)
+                .OrderByDescending(b => b.Id)
+                .Select(b => new
                 {
-                    Id = b.Id,
-                    BorrowerName = b.User!.Name,
-                    RoomName = b.Room!.Name,
+                    b.Id,
+                    b.RoomId,
+                    RoomName = b.Room.Name,
+                    BorrowerName = b.User.Name,
+                    // FIX: Format DateTime ke String
                     Date = b.BookingDate.ToString("yyyy-MM-dd"),
+                    // FIX: Format TimeSpan ke String (hh:mm)
+                    StartTime = b.StartTime.ToString(@"hh\:mm"),
+                    EndTime = b.EndTime.ToString(@"hh\:mm"),
                     Time = $"{b.StartTime:hh\\:mm} - {b.EndTime:hh\\:mm}",
-                    Status = b.Status
+                    b.Status,
+                    b.Purpose
                 })
                 .ToListAsync();
 
             return Ok(bookings);
         }
 
-        // POST: api/bookings (Mengajukan Pinjaman)
+        // ---------------------------------------------------------
+        // 2. POST: Buat Booking Baru
+        // ---------------------------------------------------------
         [HttpPost]
-        public async Task<ActionResult> CreateBooking(CreateBookingDto request)
+        public async Task<IActionResult> CreateBooking([FromBody] BookingRequest request)
         {
-            // 1. Parsing Waktu (String "08:00" -> TimeSpan)
-            if (!TimeSpan.TryParse(request.StartTime, out var start) || 
-                !TimeSpan.TryParse(request.EndTime, out var end))
+            // Validasi User & Room
+            var user = await _context.Users.FindAsync(request.UserId);
+            var room = await _context.Rooms.FindAsync(request.RoomId);
+            if (user == null || room == null) return BadRequest("User atau Ruangan tidak valid.");
+
+            // FIX: Parsing ke DateTime & TimeSpan (Sesuai Entity Lama)
+            if (!DateTime.TryParse(request.BookingDate, out DateTime dateVal) ||
+                !TimeSpan.TryParse(request.StartTime, out TimeSpan startVal) ||
+                !TimeSpan.TryParse(request.EndTime, out TimeSpan endVal))
             {
-                return BadRequest("Format jam salah. Gunakan HH:mm (contoh 09:30)");
+                return BadRequest("Format tanggal (YYYY-MM-DD) atau waktu (HH:mm) salah.");
             }
 
-            if (start >= end)
-            {
-                return BadRequest("Jam selesai harus lebih besar dari jam mulai.");
-            }
+            if (startVal >= endVal) return BadRequest("Jam mulai harus sebelum jam selesai.");
 
-            // 2. CEK TABRAKAN JADWAL (Conflict Check)
-            // Logika: Cari booking lain di Ruangan & Tanggal yang sama, 
-            // dimana Statusnya 'Approved' (atau 'Pending' jika ingin ketat),
-            // dan Waktunya beririsan.
-            var isConflict = await _context.Bookings.AnyAsync(b => 
+            // Cek Bentrok (Conflict Check)
+            bool isConflict = await _context.Bookings.AnyAsync(b =>
                 b.RoomId == request.RoomId &&
-                b.BookingDate.Date == request.BookingDate.Date &&
-                b.Status == "Approved" && // Hanya yang sudah disetujui yang memblokir jadwal
-                ((start < b.EndTime) && (end > b.StartTime))
+                b.BookingDate.Date == dateVal.Date && // Bandingkan Date-nya saja
+                b.Status == "Approved" &&
+                (b.StartTime < endVal && b.EndTime > startVal)
             );
 
             if (isConflict)
             {
-                return BadRequest("Maaf, ruangan sudah dipinjam (Approved) pada jam tersebut.");
+                return BadRequest("Ruangan sudah terisi pada jam tersebut.");
             }
 
-            // 3. Simpan Booking Baru
-            var booking = new Booking
+            var newBooking = new Booking
             {
                 UserId = request.UserId,
                 RoomId = request.RoomId,
-                BookingDate = request.BookingDate,
-                StartTime = start,
-                EndTime = end,
+                BookingDate = dateVal, // Masuk sebagai DateTime
+                StartTime = startVal,  // Masuk sebagai TimeSpan
+                EndTime = endVal,      // Masuk sebagai TimeSpan
                 Purpose = request.Purpose,
-                Status = "Pending" // Default Pending, menunggu Admin
+                Status = "Pending"
             };
 
-            _context.Bookings.Add(booking);
+            _context.Bookings.Add(newBooking);
             await _context.SaveChangesAsync();
 
-            return Ok(new { message = "Peminjaman berhasil diajukan, menunggu persetujuan Admin." });
+            return CreatedAtAction(nameof(GetBookings), new { id = newBooking.Id }, newBooking);
         }
 
-        // PUT: api/bookings/{id}/status (Admin Approval)
-        [HttpPut("{id}/status")]
-        public async Task<IActionResult> UpdateStatus(int id, [FromBody] string status) 
+        // ---------------------------------------------------------
+        // 3. PUT: Edit Booking
+        // ---------------------------------------------------------
+        [HttpPut("{id}")]
+        public async Task<IActionResult> UpdateBooking(int id, [FromBody] BookingRequest request)
         {
-            // status input: "Approved" atau "Rejected"
             var booking = await _context.Bookings.FindAsync(id);
-            if (booking == null) return NotFound();
+            if (booking == null) return NotFound("Data peminjaman tidak ditemukan.");
+
+            if (booking.Status != "Pending")
+            {
+                return BadRequest("Hanya peminjaman berstatus 'Pending' yang dapat diubah.");
+            }
+
+            // FIX: Parsing ke DateTime & TimeSpan
+            if (!DateTime.TryParse(request.BookingDate, out DateTime dateVal) ||
+                !TimeSpan.TryParse(request.StartTime, out TimeSpan startVal) ||
+                !TimeSpan.TryParse(request.EndTime, out TimeSpan endVal))
+            {
+                return BadRequest("Format tanggal atau waktu salah.");
+            }
+
+            if (startVal >= endVal) return BadRequest("Jam mulai harus sebelum jam selesai.");
+
+            // Cek Bentrok (Kecuali diri sendiri)
+            bool isConflict = await _context.Bookings.AnyAsync(b =>
+                b.Id != id &&
+                b.RoomId == request.RoomId &&
+                b.BookingDate.Date == dateVal.Date &&
+                b.Status == "Approved" &&
+                (b.StartTime < endVal && b.EndTime > startVal)
+            );
+
+            if (isConflict)
+            {
+                return BadRequest("Jadwal bentrok dengan peminjaman lain yang sudah disetujui.");
+            }
+
+            // Update Data
+            booking.RoomId = request.RoomId;
+            booking.BookingDate = dateVal;
+            booking.StartTime = startVal;
+            booking.EndTime = endVal;
+            booking.Purpose = request.Purpose;
+            
+            await _context.SaveChangesAsync();
+            return Ok(new { message = "Booking berhasil diperbarui." });
+        }
+
+        // ---------------------------------------------------------
+        // 4. DELETE: Cancel Booking
+        // ---------------------------------------------------------
+        [HttpDelete("{id}")]
+        public async Task<IActionResult> DeleteBooking(int id)
+        {
+            var booking = await _context.Bookings.FindAsync(id);
+            if (booking == null) return NotFound("Data tidak ditemukan.");
+
+            if (booking.Status != "Pending")
+            {
+                return BadRequest("Hanya peminjaman berstatus 'Pending' yang dapat dibatalkan.");
+            }
+
+            _context.Bookings.Remove(booking);
+            await _context.SaveChangesAsync();
+
+            return Ok(new { message = "Booking berhasil dibatalkan." });
+        }
+
+        // ---------------------------------------------------------
+        // 5. UPDATE STATUS (Approval)
+        // ---------------------------------------------------------
+        [HttpPut("{id}/status")]
+        public async Task<IActionResult> UpdateStatus(int id, [FromBody] string status)
+        {
+            var booking = await _context.Bookings.FindAsync(id);
+            if (booking == null) return NotFound("Booking not found");
 
             if (status != "Approved" && status != "Rejected")
-                return BadRequest("Status hanya boleh 'Approved' atau 'Rejected'");
+                return BadRequest("Invalid status. Use 'Approved' or 'Rejected'.");
 
-            // Jika mau Approve, cek lagi apakah tiba-tiba ada yang Approved duluan
+            // Cek Konflik sebelum Approve
             if (status == "Approved")
             {
-                var isConflict = await _context.Bookings.AnyAsync(b => 
-                    b.Id != id && // Jangan cek diri sendiri
+                bool isConflict = await _context.Bookings.AnyAsync(b =>
+                    b.Id != id &&
                     b.RoomId == booking.RoomId &&
-                    b.BookingDate == booking.BookingDate &&
-                    b.Status == "Approved" && 
-                    ((booking.StartTime < b.EndTime) && (booking.EndTime > b.StartTime))
+                    b.BookingDate.Date == booking.BookingDate.Date &&
+                    b.Status == "Approved" &&
+                    (booking.StartTime < b.EndTime && booking.EndTime > b.StartTime)
                 );
 
                 if (isConflict) return BadRequest("Gagal Approve. Ruangan sudah terisi oleh peminjam lain.");
@@ -115,7 +195,19 @@ namespace Manruka.API.Controllers
 
             booking.Status = status;
             await _context.SaveChangesAsync();
-            return Ok(new { message = $"Booking berhasil diubah menjadi {status}" });
+
+            return Ok(new { message = $"Booking {status} successfully" });
         }
+    }
+
+    // FIX: Class DTO (Tambahkan inisialisasi string.Empty untuk cegah warning CS8618)
+    public class BookingRequest
+    {
+        public int UserId { get; set; }
+        public int RoomId { get; set; }
+        public string BookingDate { get; set; } = string.Empty;
+        public string StartTime { get; set; } = string.Empty;
+        public string EndTime { get; set; } = string.Empty;
+        public string Purpose { get; set; } = string.Empty;
     }
 }
